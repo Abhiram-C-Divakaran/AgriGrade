@@ -17,9 +17,19 @@ models/*.pt
 models/*.pth
 models/*.onnx
 
+# Large/local datasets
 data/raw/**
 !data/raw/.gitkeep
+data/staging/**
+!data/staging/.gitkeep
 data/processed/**
 !data/processed/.gitkeep
 data/custom/**
 !data/custom/.gitkeep
+data/real_world_test/**
+!data/real_world_test/.gitkeep
+data/rejected/**
+!data/rejected/.gitkeep
+
+# Generated QA artifacts
+artifacts/annotation_previews/**
