@@ -1,0 +1,17 @@
+path: ../data/processed/apple_defects
+train: images/train
+val: images/val
+test: images/test
+
+# Every image should include an apple polygon plus zero or more defect polygons.
+# The apple mask is used as the denominator for affected-surface percentages.
+names:
+  0: apple
+  1: rot
+  2: mold
+  3: bruise
+  4: dark_spot
+  5: cut
+  6: crack
+  7: discoloration
+  8: pest_damage

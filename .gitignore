@@ -6,3 +6,20 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Python / ML
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+runs/
+models/*.pt
+models/*.pth
+models/*.onnx
+
+data/raw/**
+!data/raw/.gitkeep
+data/processed/**
+!data/processed/.gitkeep
+data/custom/**
+!data/custom/.gitkeep
