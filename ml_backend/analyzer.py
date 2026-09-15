@@ -127,11 +127,16 @@ def detect_defects(image: Image.Image) -> List[Dict]:
     )[0]
 
     if result.boxes is None or len(result.boxes) == 0:
-        return []
+        raise RuntimeError(
+            "Apple foreground was not detected. Capture one clearly visible apple and retry."
+        )
 
     masks_data = None
     if result.masks is not None:
         masks_data = result.masks.data.detach().cpu().numpy()
+
+    if masks_data is None:
+        raise RuntimeError("Segmentation model returned boxes without masks.")
 
     # The segmentation dataset includes an `apple` class. We use its largest mask
     # as the visible produce denominator so defect coverage is relative to the apple,
@@ -140,7 +145,7 @@ def detect_defects(image: Image.Image) -> List[Dict]:
     for i, box in enumerate(result.boxes):
         class_id = int(box.cls.item())
         class_name = str(result.names[class_id]).lower()
-        if class_name == "apple" and masks_data is not None and i < len(masks_data):
+        if class_name == "apple" and i < len(masks_data):
             apple_masks.append(_resize_mask(masks_data[i], height, width) > 0.5)
 
     if not apple_masks:
@@ -165,7 +170,7 @@ def detect_defects(image: Image.Image) -> List[Dict]:
         xyxy = box.xyxy[0].detach().cpu().tolist()
 
         affected = 0.0
-        if masks_data is not None and i < len(masks_data):
+        if i < len(masks_data):
             defect_mask = _resize_mask(masks_data[i], height, width) > 0.5
             defect_on_apple = np.logical_and(defect_mask, apple_mask)
             affected = 100.0 * float(defect_on_apple.sum()) / apple_area
