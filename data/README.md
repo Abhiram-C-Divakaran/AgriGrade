@@ -1,63 +1,110 @@
-# AgriGrade Apple dataset layout
+# AgriGrade Apple dataset workflow
 
 Large datasets and trained weights are intentionally **not committed to Git**.
 
-## Freshness classification
+Phase 3 prepares real Apple data before any model training. External data must have a documented source and license in `data/manifests/dataset_sources.csv`.
 
-Place original Apple images here before preparation:
+## Directory layout
 
 ```text
-data/raw/apple_freshness/
-├── fresh/
-├── ripe/
-├── overripe/
-└── decayed/
+data/
+├── raw/
+│   ├── freshness/
+│   └── defects/
+├── staging/
+├── processed/
+│   ├── apple_freshness/
+│   └── apple_defects/
+├── real_world_test/
+├── rejected/
+└── manifests/
 ```
 
-Then run:
+## Import an external dataset
 
 ```bash
-python training/prepare_classifier_dataset.py
+python training/import_dataset.py \
+  --source /path/to/dataset \
+  --name dataset_name \
+  --task freshness \
+  --source-url https://example.com/dataset \
+  --license "license-name" \
+  --license-url https://example.com/license
 ```
 
-The script removes exact/visually identical duplicates, then creates train/validation/test splits before augmentation.
+For segmentation sources, use `--task defects`.
+
+The importer validates image readability, records dimensions/file size, computes SHA256 and pHash, copies valid images to staging, and updates the master manifest.
+
+## Import custom phone photos
+
+```bash
+python training/import_custom_images.py --source ./phone_photos --task freshness
+python training/import_custom_images.py --source ./phone_photos --task defects
+python training/import_custom_images.py --source ./held_out_phone_photos --task real_world_test
+```
+
+Custom photos remain unlabeled until a person reviews them.
+
+## Freshness labels
+
+Canonical classes are:
+
+- `fresh`
+- `ripe`
+- `overripe`
+- `decayed`
+
+See `docs/DATASET_LABEL_GUIDE.md` for definitions.
 
 ## Defect segmentation
 
-Use YOLO segmentation annotations, not only classification labels.
+Use YOLO polygon segmentation annotations. Classes must exactly match `training/apple_defects.yaml`:
 
-Prepared layout:
+0. apple
+1. rot
+2. mold
+3. bruise
+4. dark_spot
+5. cut
+6. crack
+7. discoloration
+8. pest_damage
 
-```text
-data/processed/apple_defects/
-├── images/
-│   ├── train/
-│   ├── val/
-│   └── test/
-└── labels/
-    ├── train/
-    ├── val/
-    └── test/
+Every segmentation image needs an `apple` foreground polygon. Defect percentages are calculated relative to visible Apple pixels, not the full photograph.
+
+See `docs/DEFECT_ANNOTATION_GUIDE.md`.
+
+## Validation commands
+
+```bash
+python training/validate_images.py
+python training/deduplicate.py
+python training/normalize_labels.py
+python training/validate_annotations.py
+python training/preview_annotations.py --count 50
+python training/dataset_report.py
 ```
 
-Classes are defined in `training/apple_defects.yaml`:
+Or run the conservative readiness pipeline:
 
-1. apple
-2. rot
-3. mold
-4. bruise
-5. dark_spot
-6. cut
-7. crack
-8. discoloration
-9. pest_damage
+```bash
+python training/prepare_all_data.py
+```
 
-Every labeled image should contain one polygon for the visible apple surface (`apple`) and polygons for every visible defect. The inference service divides defect-mask pixels by the apple-mask pixels to estimate affected surface percentage.
+It exits with a non-zero status until the real dataset passes readiness checks.
 
-## Dataset rules
+## Data leakage rules
 
-- Split original images before augmentation.
-- Do not place rotated/cropped versions of one original across different splits.
-- Keep dataset source/license metadata outside the image folders, ideally in a CSV manifest.
-- Maintain a separate real-world phone-photo test set that is never used for training.
-- Include healthy, mildly defective, severely rotten, moldy, bruised, low-light, bright-light and non-white-background examples.
+- Split original image groups before augmentation.
+- Never place an original in train and a resized/rotated/augmented copy in validation or test.
+- Treat near-duplicate pairs as a manual-review queue.
+- Keep the `data/real_world_test/` phone-photo set completely outside training, validation, augmentation, and hyperparameter tuning.
+
+## Do not train yet
+
+Only start `train_freshness.py` and `train_defects.py` after `prepare_all_data.py` reports:
+
+```text
+DATASET READY FOR TRAINING: YES
+```
