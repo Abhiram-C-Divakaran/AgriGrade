@@ -1,0 +1,1 @@
+image_id,original_filename,current_path,task,source_dataset,source_url,license,apple_variety,freshness_label,defect_labels,annotation_status,width,height,file_size,sha256,perceptual_hash,split,is_augmented,parent_image_id,rejection_reason,notes

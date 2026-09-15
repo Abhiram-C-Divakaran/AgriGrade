@@ -1,6 +1,6 @@
 # AgriGrade AI
 
-AgriGrade is a fruit and vegetable quality-grading web application. The current UI is React/Vite, the web API is Express/TypeScript, and this branch adds the first real Apple ML pipeline using EfficientNet and YOLO segmentation.
+AgriGrade is a fruit and vegetable quality-grading web application. The frontend is React/Vite, the web API is Express/TypeScript, and the Apple ML path uses a Python FastAPI service with EfficientNet-B0 freshness classification and YOLO11 segmentation.
 
 ## Architecture
 
@@ -11,54 +11,87 @@ Browser
      OR
      -> Python FastAPI ML service (ANALYSIS_PROVIDER=ml)
         -> EfficientNet-B0 freshness model
-        -> YOLO11 segmentation model
+        -> YOLO11 Apple/defect segmentation
         -> explainable scoring engine
 ```
 
-## Run the existing web application
+## Current project phase
+
+Phase 1: backend/API readiness — complete.
+
+Phase 2: Apple ML training and inference architecture — complete.
+
+Phase 3: real Apple dataset ingestion, cleaning, manifests, annotation QA and readiness checks — in progress.
+
+The repository does not contain large datasets or trained `.pt` files. The ML service intentionally reports `ai_ready: false` until both trained models exist and load successfully.
+
+## Run the web application
 
 ```bash
 npm install
 npm run dev
 ```
 
-The web app runs on `http://localhost:3000` by default.
+Default URL: `http://localhost:3000`.
 
 ## Run the Python ML service
 
-Create and activate a Python virtual environment, then install:
-
 ```bash
 pip install -r ml_backend/requirements.txt
-```
-
-Start the service:
-
-```bash
 uvicorn ml_backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health check:
+Health check: `http://localhost:8000/health`.
 
-```text
-http://localhost:8000/health
+## Phase 3 — prepare the Apple dataset first
+
+Do not start final model training until the dataset passes validation.
+
+Import a licensed dataset:
+
+```bash
+python training/import_dataset.py \
+  --source /path/to/dataset \
+  --name dataset_name \
+  --task freshness \
+  --source-url https://example.com/dataset \
+  --license "license-name"
 ```
 
-Before trained weights exist, the service intentionally reports `ai_ready: false` instead of fabricating predictions.
+For segmentation data use `--task defects`.
 
-## Train Apple freshness
+Import custom phone photos:
 
-Prepare original images as:
-
-```text
-data/raw/apple_freshness/
-├── fresh/
-├── ripe/
-├── overripe/
-└── decayed/
+```bash
+python training/import_custom_images.py --source ./phone_photos --task freshness
+python training/import_custom_images.py --source ./held_out_photos --task real_world_test
 ```
 
-Then run:
+Run QA/readiness:
+
+```bash
+python training/validate_images.py
+python training/deduplicate.py
+python training/normalize_labels.py
+python training/validate_annotations.py
+python training/preview_annotations.py --count 50
+python training/dataset_report.py
+python training/prepare_all_data.py
+```
+
+Only move to training when the final command reports:
+
+```text
+DATASET READY FOR TRAINING: YES
+```
+
+Dataset and annotation rules are documented in:
+
+- `data/README.md`
+- `docs/DATASET_LABEL_GUIDE.md`
+- `docs/DEFECT_ANNOTATION_GUIDE.md`
+
+## Train Apple freshness after Phase 3 passes
 
 ```bash
 python training/prepare_classifier_dataset.py
@@ -66,33 +99,17 @@ python training/train_freshness.py
 python training/evaluate_freshness.py
 ```
 
-Output:
+Output: `models/apple_freshness_best.pt`.
 
-```text
-models/apple_freshness_best.pt
-```
-
-## Train Apple defect segmentation
-
-Annotate Apple images using YOLO segmentation. Each image should contain an `apple` polygon and any visible defect polygons.
-
-Classes are defined in `training/apple_defects.yaml`.
-
-Then run:
+## Train Apple defect segmentation after Phase 3 passes
 
 ```bash
 python training/train_defects.py
 ```
 
-Output:
+Output: `models/apple_defects_best.pt`.
 
-```text
-models/apple_defects_best.pt
-```
-
-## Switch the website to the trained ML pipeline
-
-In `.env`:
+## Switch the website to trained ML
 
 ```env
 ANALYSIS_PROVIDER=ml
@@ -101,9 +118,7 @@ PORT=3000
 VITE_API_URL=
 ```
 
-Restart both services. The Express `/api/health` endpoint will only report the AI as ready when the FastAPI service is reachable and both trained model files load successfully.
-
-To keep using the Gemini prototype instead:
+For the Gemini prototype instead:
 
 ```env
 ANALYSIS_PROVIDER=gemini
@@ -112,6 +127,6 @@ GEMINI_API_KEY=your_key_here
 
 ## Current ML scope
 
-The trained pipeline currently supports **Apple only**. Other produce types should remain on the Gemini prototype or be disabled until produce-specific training data and models are added.
+The trained ML path is Apple-first. Other produce types should remain on the prototype path or be disabled until produce-specific datasets and models are available.
 
-Large datasets, training runs and model weights are ignored by Git and should not be committed.
+Never commit raw datasets, API keys, training runs, or trained model weights.

@@ -1,0 +1,10 @@
+{
+  "version": "apple-dataset-v0.1",
+  "created_at": null,
+  "split_seed": 42,
+  "total_images": 0,
+  "freshness_images": 0,
+  "segmentation_images": 0,
+  "sources": [],
+  "notes": "Populate after real datasets are imported and validated."
+}
