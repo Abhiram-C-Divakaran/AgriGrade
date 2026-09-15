@@ -22,8 +22,7 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_BYTES = 10 * 1024 * 1024
 
 
-@app.get("/health")
-def health():
+def _health_payload():
     models = model_status()
     return {
         "status": "ok" if models["ready"] else "degraded",
@@ -31,6 +30,16 @@ def health():
         "ai_ready": models["ready"],
         "models": models,
     }
+
+
+@app.get("/health")
+def health():
+    return _health_payload()
+
+
+@app.get("/api/health")
+def api_health():
+    return _health_payload()
 
 
 @app.post("/api/analyze")
