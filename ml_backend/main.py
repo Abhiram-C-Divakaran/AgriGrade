@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .analyzer import analyze_image, model_status
 
@@ -22,24 +23,25 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_BYTES = 10 * 1024 * 1024
 
 
-def _health_payload():
+def _health_response():
     models = model_status()
-    return {
+    payload = {
         "status": "ok" if models["ready"] else "degraded",
         "service": "AgriGrade Apple ML",
         "ai_ready": models["ready"],
         "models": models,
     }
+    return JSONResponse(content=payload, status_code=200 if models["ready"] else 503)
 
 
 @app.get("/health")
 def health():
-    return _health_payload()
+    return _health_response()
 
 
 @app.get("/api/health")
 def api_health():
-    return _health_payload()
+    return _health_response()
 
 
 @app.post("/api/analyze")
