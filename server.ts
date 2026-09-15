@@ -10,6 +10,8 @@ dotenv.config();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.trim();
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
+const ANALYSIS_PROVIDER = (process.env.ANALYSIS_PROVIDER || "gemini").trim().toLowerCase();
+const ML_API_URL = (process.env.ML_API_URL || "http://localhost:8000").replace(/\/$/, "");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -17,8 +19,16 @@ const upload = multer({
 });
 
 const VALID_GRADES = new Set(["A", "B", "C", "D", "Reject"]);
-const VALID_RIPENESS = new Set(["Unripe", "Nearly Ripe", "Ripe", "Overripe", "Decayed"]);
 const VALID_SEVERITIES = new Set(["low", "medium", "high"]);
+const RIPENESS_MAP: Record<string, string> = {
+  unripe: "Unripe",
+  "nearly ripe": "Nearly Ripe",
+  nearly_ripe: "Nearly Ripe",
+  ripe: "Ripe",
+  overripe: "Overripe",
+  decayed: "Decayed",
+  fresh: "Fresh",
+};
 
 type Severity = "low" | "medium" | "high";
 
@@ -73,6 +83,15 @@ function gradeFromScore(score: number): AnalysisResult["grade"] {
   return "Reject";
 }
 
+function normalizeRipenessStage(value: unknown): string {
+  const stage = requireString(value, "ripeness.stage");
+  const normalized = RIPENESS_MAP[stage.toLowerCase()];
+  if (!normalized) {
+    throw new Error("Invalid model response: ripeness.stage is not recognized.");
+  }
+  return normalized;
+}
+
 function validateModelResult(raw: unknown): AnalysisResult {
   if (!isRecord(raw)) {
     throw new Error("Invalid model response: expected a JSON object.");
@@ -90,11 +109,7 @@ function validateModelResult(raw: unknown): AnalysisResult {
     throw new Error("Invalid model response: ripeness is missing.");
   }
 
-  const ripenessStage = requireString(raw.ripeness.stage, "ripeness.stage");
-  if (!VALID_RIPENESS.has(ripenessStage)) {
-    throw new Error("Invalid model response: ripeness.stage is not recognized.");
-  }
-
+  const ripenessStage = normalizeRipenessStage(raw.ripeness.stage);
   const ripenessConfidence = requireNumber(raw.ripeness.confidence, "ripeness.confidence", 0, 1);
 
   if (!Array.isArray(raw.defects)) {
@@ -162,8 +177,7 @@ function validateModelResult(raw: unknown): AnalysisResult {
     );
   });
 
-  // Keep the final numeric score and grade internally consistent.
-  if (severeRotOrMold || totalDefectAreaPercent > 20) {
+  if (severeRotOrMold || totalDefectAreaPercent > 20 || ripenessStage === "Decayed") {
     qualityScore = Math.min(qualityScore, 29);
   } else if (severeDefect) {
     qualityScore = Math.min(qualityScore, 54);
@@ -187,6 +201,64 @@ function validateModelResult(raw: unknown): AnalysisResult {
   };
 }
 
+async function getMlHealth(): Promise<{ ready: boolean; details: unknown }> {
+  try {
+    const response = await fetch(`${ML_API_URL}/health`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    const text = await response.text();
+    let details: unknown = text;
+    try {
+      details = JSON.parse(text);
+    } catch {
+      // Preserve non-JSON upstream response for diagnostics.
+    }
+
+    const ready = response.ok && isRecord(details) && details.ai_ready === true;
+    return { ready, details };
+  } catch (error: any) {
+    return {
+      ready: false,
+      details: error?.message || "Unable to reach the ML service.",
+    };
+  }
+}
+
+async function analyzeWithMl(file: Express.Multer.File, produceType: string): Promise<AnalysisResult> {
+  const formData = new FormData();
+  formData.append(
+    "image",
+    new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }),
+    file.originalname || "produce-image",
+  );
+  formData.append("produce_type", produceType);
+
+  const response = await fetch(`${ML_API_URL}/api/analyze`, {
+    method: "POST",
+    body: formData,
+    signal: AbortSignal.timeout(120000),
+  });
+
+  const text = await response.text();
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`ML service returned non-JSON data (HTTP ${response.status}).`);
+  }
+
+  if (!response.ok) {
+    let detail = `ML analysis failed with HTTP ${response.status}.`;
+    if (isRecord(parsed) && typeof parsed.detail === "string") {
+      detail = parsed.detail;
+    }
+    throw new Error(detail);
+  }
+
+  return validateModelResult(parsed);
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -194,12 +266,36 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  app.get("/api/health", (_req, res) => {
-    const aiReady = Boolean(ai);
+  app.get("/api/health", async (_req, res) => {
+    if (ANALYSIS_PROVIDER === "ml") {
+      const ml = await getMlHealth();
+      return res.status(ml.ready ? 200 : 503).json({
+        status: ml.ready ? "ok" : "degraded",
+        service: "AgriGrade AI",
+        provider: "ml",
+        ai_ready: ml.ready,
+        message: ml.ready
+          ? "Trained Apple ML service is ready."
+          : "ML service is unavailable or model weights are not installed.",
+        upstream: ml.details,
+      });
+    }
 
+    if (ANALYSIS_PROVIDER !== "gemini") {
+      return res.status(503).json({
+        status: "degraded",
+        service: "AgriGrade AI",
+        provider: ANALYSIS_PROVIDER,
+        ai_ready: false,
+        message: 'ANALYSIS_PROVIDER must be either "gemini" or "ml".',
+      });
+    }
+
+    const aiReady = Boolean(ai);
     return res.status(aiReady ? 200 : 503).json({
       status: aiReady ? "ok" : "degraded",
       service: "AgriGrade AI",
+      provider: "gemini",
       ai_ready: aiReady,
       message: aiReady
         ? "Gemini image analysis is configured."
@@ -225,13 +321,6 @@ async function startServer() {
     },
     async (req, res) => {
       try {
-        if (!ai) {
-          return res.status(503).json({
-            error: "AI_NOT_CONFIGURED",
-            details: "GEMINI_API_KEY is missing. Add it to your environment and restart the server.",
-          });
-        }
-
         const file = req.file;
         const produceType = String(req.body.produce_type || "produce").trim().toLowerCase();
 
@@ -242,6 +331,33 @@ async function startServer() {
         const validMimeTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
         if (!validMimeTypes.includes(file.mimetype)) {
           return res.status(415).json({ error: "Unsupported image format." });
+        }
+
+        if (ANALYSIS_PROVIDER === "ml") {
+          try {
+            const result = await analyzeWithMl(file, produceType);
+            return res.json(result);
+          } catch (error: any) {
+            console.error("ML analysis error:", error);
+            return res.status(503).json({
+              error: "ML_ANALYSIS_FAILED",
+              details: error?.message || "The trained ML service could not analyze this image.",
+            });
+          }
+        }
+
+        if (ANALYSIS_PROVIDER !== "gemini") {
+          return res.status(503).json({
+            error: "INVALID_ANALYSIS_PROVIDER",
+            details: 'ANALYSIS_PROVIDER must be either "gemini" or "ml".',
+          });
+        }
+
+        if (!ai) {
+          return res.status(503).json({
+            error: "AI_NOT_CONFIGURED",
+            details: "GEMINI_API_KEY is missing. Add it to your environment and restart the server.",
+          });
         }
 
         const base64Data = file.buffer.toString("base64");
@@ -385,7 +501,11 @@ Make sure total_defect_area_percent reflects reality based on the image.
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Analysis provider: ${ANALYSIS_PROVIDER}`);
     console.log(`Gemini configured: ${Boolean(ai)}`);
+    if (ANALYSIS_PROVIDER === "ml") {
+      console.log(`ML service: ${ML_API_URL}`);
+    }
   });
 }
 
